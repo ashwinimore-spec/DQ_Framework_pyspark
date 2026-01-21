@@ -1,40 +1,23 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit
 
 def generate_target_data():
-    spark = SparkSession.builder \
-        .appName("Generate Buggy Target Data") \
-        .getOrCreate()
+    spark = SparkSession.builder.appName("Generate Target Data").getOrCreate()
 
-    # Read expected (clean source) data
-    expected_df = spark.read.option("header", True).option("inferSchema", True) \
-        .csv("data/cleaned_source_data.csv")
+    data = [
+        (101, "JOHN", 70, None, 50000),
+        (102, "Alice", 17, "alice@example.com", 60000),
+        (103, "Bob", 65, "bob@example.com", None),
+        (104, None, 30, "mike@example.com", None),
+        (101, "JOHN DUP", 25, "john@example.com", 50000),
+        (999, "Ghost", 40, "ghost@example.com", 40000)
+    ]
 
-    # Introduce developer bugs intentionally
+    columns = ["customer_id", "name", "age", "email", "salary"]
+    df = spark.createDataFrame(data, columns)
 
-    # 1. Age rule broken
-    target_df = expected_df.withColumn(
-        "age",
-        col("age") + 15   # pushes some ages beyond 60
-    )
+    df.coalesce(1).write.mode("overwrite").option("header", True).csv("data/target_data.csv")
 
-    # 2. Email corruption
-    target_df = target_df.withColumn(
-        "email",
-        lit(None)
-    )
-
-    # 3. Duplicate primary key
-    dup_row = target_df.limit(1)
-    target_df = target_df.union(dup_row)
-
-    # 4. Missing mandatory column (salary)
-    target_df = target_df.drop("salary")
-
-    target_df.write.mode("overwrite").option("header", True) \
-        .csv("data/target_data.csv")
-
-    print("Buggy target data generated (developer defects simulated)")
+    print("Buggy target data generated")
 
     spark.stop()
 

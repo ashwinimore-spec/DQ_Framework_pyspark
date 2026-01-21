@@ -1,86 +1,52 @@
-import streamlit as st
 import pandas as pd
-import os
+import streamlit as st
+from pathlib import Path
 
-st.set_page_config(
-    page_title="Data Quality Dashboard",
-    layout="wide"
-)
+st.set_page_config(page_title="Data Quality Dashboard", layout="wide")
 
 st.title("📊 Data Quality Dashboard")
 
-DATA_DIR = "data"
+# -----------------------------
+# Load data safely
+# -----------------------------
+def load_csv(folder):
+    files = list(Path(folder).glob("*.csv"))
+    return pd.read_csv(files[0]) if files else pd.DataFrame()
 
+source_df = load_csv("data/raw_source_data.csv")
+target_df = load_csv("data/target_data.csv")
+defect_df = load_csv("data/dq_defect_report.csv")
 
-# --------------------------------------------------
-# Utility: Safe CSV reader
-# --------------------------------------------------
-def read_csv_safe(folder_name):
-    path = os.path.join(DATA_DIR, folder_name)
-    if not os.path.exists(path):
-        return pd.DataFrame()
-
-    files = [f for f in os.listdir(path) if f.endswith(".csv")]
-    if not files:
-        return pd.DataFrame()
-
-    return pd.read_csv(os.path.join(path, files[0]))
-
-
-# --------------------------------------------------
-# Load datasets (IMPORTANT CHANGE HERE)
-# --------------------------------------------------
-source_df = read_csv_safe("raw_source_data.csv")      # ✅ MAIN SOURCE
-target_df = read_csv_safe("target_data.csv")
-defect_df = read_csv_safe("dq_defect_report.csv")
-
-
-# --------------------------------------------------
-# KPI Section
-# --------------------------------------------------
-col1, col2, col3, col4, col5 = st.columns(5)
+# -----------------------------
+# KPIs
+# -----------------------------
+col1, col2, col3, col4 = st.columns(4)
 
 col1.metric("Source Rows", len(source_df))
 col2.metric("Target Rows", len(target_df))
 col3.metric("Total Defects", len(defect_df))
-
-# Duplicate defects
-if "defect_type" in defect_df.columns:
-    dup_count = defect_df["defect_type"].str.contains(
-        "DUPLICATE", case=False, na=False
-    ).sum()
-else:
-    dup_count = 0
-
-col4.metric("Duplicate Defects", dup_count)
-
-# Null-related defects
-if "issues" in defect_df.columns:
-    null_count = defect_df["issues"].str.contains(
-        "null", case=False, na=False
-    ).sum()
-else:
-    null_count = 0
-
-col5.metric("Null Issues", null_count)
+col4.metric(
+    "Critical Defects",
+    len(defect_df[defect_df["severity"] == "critical"]) if not defect_df.empty else 0
+)
 
 st.divider()
 
-
-# --------------------------------------------------
+# -----------------------------
 # Tabs
-# --------------------------------------------------
+# -----------------------------
 tab1, tab2, tab3, tab4 = st.tabs(
-    ["Defects", "Source Sample", "Target Sample", "Summary"]
+    ["🚨 Defects", "📄 Source Sample", "📄 Target Sample", "📊 Summary"]
 )
 
-
-# ---------------- Defects ----------------
+# -----------------------------
+# Defects Tab
+# -----------------------------
 with tab1:
     st.subheader("Full Defect Report")
 
     if defect_df.empty:
-        st.info("No defects available.")
+        st.success("No defects found 🎉")
     else:
         st.dataframe(defect_df, use_container_width=True)
 
@@ -88,33 +54,32 @@ with tab1:
             "⬇ Download Defect CSV",
             defect_df.to_csv(index=False),
             "dq_defect_report.csv",
-            mime="text/csv"
+            "text/csv"
         )
 
-
-# ---------------- Source ----------------
+# -----------------------------
+# Source Sample
+# -----------------------------
 with tab2:
-    st.subheader("Raw Source Sample (Before Cleaning)")
-    if source_df.empty:
-        st.warning("Raw source data not found.")
-    else:
-        st.dataframe(source_df, use_container_width=True)
+    st.subheader("Raw Source Data (Sample)")
+    st.dataframe(source_df.head(10), use_container_width=True)
 
-
-# ---------------- Target ----------------
+# -----------------------------
+# Target Sample
+# -----------------------------
 with tab3:
-    st.subheader("Target Sample (After Transformations)")
-    if target_df.empty:
-        st.warning("Target data not found.")
-    else:
-        st.dataframe(target_df, use_container_width=True)
+    st.subheader("Target Data (Sample)")
+    st.dataframe(target_df.head(10), use_container_width=True)
 
-
-# ---------------- Summary ----------------
+# -----------------------------
+# Summary
+# -----------------------------
 with tab4:
-    st.subheader("Defect Summary")
-
-    if defect_df.empty or "severity" not in defect_df.columns:
-        st.info("No summary data available.")
-    else:
-        st.bar_chart(defect_df["severity"].value_counts())
+    st.subheader("Defects by Type")
+    if not defect_df.empty:
+        st.dataframe(
+            defect_df.groupby(["defect_type", "severity"])
+            .size()
+            .reset_index(name="count"),
+            use_container_width=True
+        )

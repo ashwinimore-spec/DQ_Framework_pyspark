@@ -1,93 +1,118 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, lit, trim, count
+from pyspark.sql.functions import col, trim, count
 
 def validate_data_quality():
-    spark = SparkSession.builder \
-        .appName("Validate Data Quality") \
-        .getOrCreate()
+    spark = SparkSession.builder.appName("DQ Validation").getOrCreate()
 
-    expected_df = spark.read.option("header", True).option("inferSchema", True) \
-        .csv("data/cleaned_source_data.csv")
+    # -----------------------------
+    # Read raw source & target
+    # -----------------------------
+    src = spark.read.option("header", True).option("inferSchema", True) \
+        .csv("data/raw_source_data.csv")
 
-    target_df = spark.read.option("header", True).option("inferSchema", True) \
+    tgt = spark.read.option("header", True).option("inferSchema", True) \
         .csv("data/target_data.csv")
 
     defects = []
 
-    # -------------------------------
-    # 1. Record count validation
-    # -------------------------------
-    expected_count = expected_df.count()
-    target_count = target_df.count()
-
-    if expected_count != target_count:
-        defects.append(("COUNT_MISMATCH", "Record count mismatch", "critical"))
-
-    # -------------------------------
-    # 2. Duplicate primary key check
-    # -------------------------------
-    dup_df = target_df.groupBy("customer_id").agg(count("*").alias("cnt")) \
+    # -----------------------------
+    # 1. Duplicate PK in target
+    # -----------------------------
+    dup_df = tgt.groupBy("customer_id").agg(count("*").alias("cnt")) \
         .filter(col("cnt") > 1)
 
-    if dup_df.count() > 0:
-        defects.append(("DUPLICATE_PK", "Duplicate customer_id in target", "critical"))
-
-    # -------------------------------
-    # 3. Mandatory field checks
-    # -------------------------------
-    mandatory_columns = ["customer_id", "name", "age", "email"]
-
-    for column in mandatory_columns:
-        null_count = target_df.filter(
-            col(column).isNull() | (trim(col(column)) == "")
-        ).count()
-
-        if null_count > 0:
-            defects.append((
-                "MANDATORY_NULL",
-                f"Null or blank values found in {column}",
-                "high"
-            ))
-
-    # -------------------------------
-    # 4. Age business rule
-    # -------------------------------
-    age_violation_count = target_df.filter(
-        (col("age") < 18) | (col("age") > 60)
-    ).count()
-
-    if age_violation_count > 0:
+    for row in dup_df.collect():
         defects.append((
-            "AGE_RULE_VIOLATION",
-            "Age not in range 18 to 60",
+            row["customer_id"],
+            "DUPLICATE_PK",
+            "Duplicate customer_id found in target",
+            "critical"
+        ))
+
+    # -----------------------------
+    # 2. Missing records in target
+    # -----------------------------
+    missing_df = src.select("customer_id").subtract(tgt.select("customer_id"))
+
+    for row in missing_df.collect():
+        defects.append((
+            row["customer_id"],
+            "MISSING_RECORD",
+            "Record present in source but missing in target",
             "high"
         ))
 
-    # -------------------------------
-    # 5. Email rule
-    # -------------------------------
-    email_violation_count = target_df.filter(
-        col("email").isNull() | (trim(col("email")) == "")
-    ).count()
+    # -----------------------------
+    # 3. Extra records in target
+    # -----------------------------
+    extra_df = tgt.select("customer_id").subtract(src.select("customer_id"))
 
-    if email_violation_count > 0:
+    for row in extra_df.collect():
         defects.append((
+            row["customer_id"],
+            "EXTRA_RECORD",
+            "Extra record found in target not present in source",
+            "high"
+        ))
+
+    # -----------------------------
+    # 4. Mandatory field checks
+    # -----------------------------
+    mandatory_cols = ["name", "age", "email"]
+
+    for col_name in mandatory_cols:
+        bad_rows = tgt.filter(
+            col(col_name).isNull() | (trim(col(col_name)) == "")
+        ).select("customer_id").distinct()
+
+        for row in bad_rows.collect():
+            defects.append((
+                row["customer_id"],
+                "MANDATORY_FIELD_MISSING",
+                f"Null or blank value found in column: {col_name}",
+                "high"
+            ))
+
+    # -----------------------------
+    # 5. Age business rule
+    # -----------------------------
+    age_violations = tgt.filter(
+        (col("age") < 18) | (col("age") > 60)
+    ).select("customer_id")
+
+    for row in age_violations.collect():
+        defects.append((
+            row["customer_id"],
+            "AGE_RULE_VIOLATION",
+            "Age value outside allowed range (18–60)",
+            "high"
+        ))
+
+    # -----------------------------
+    # 6. Email rule
+    # -----------------------------
+    email_issues = tgt.filter(
+        col("email").isNull() | (trim(col("email")) == "")
+    ).select("customer_id")
+
+    for row in email_issues.collect():
+        defects.append((
+            row["customer_id"],
             "EMAIL_RULE_VIOLATION",
-            "Email is null or blank",
+            "Email is null or blank in target",
             "medium"
         ))
 
-    # -------------------------------
-    # Create defect report DataFrame
-    # -------------------------------
-    defect_schema = ["defect_type", "description", "severity"]
+    # -----------------------------
+    # Create defect DataFrame
+    # -----------------------------
+    defect_columns = ["customer_id", "defect_type", "description", "severity"]
+    defect_df = spark.createDataFrame(defects, defect_columns)
 
-    defect_df = spark.createDataFrame(defects, defect_schema)
-
-    defect_df.write.mode("overwrite").option("header", True) \
+    defect_df.coalesce(1).write.mode("overwrite").option("header", True) \
         .csv("data/dq_defect_report.csv")
 
-    print("Data Quality validation completed. Defect report generated.")
+    print(f"DQ Validation completed. Total defects: {defect_df.count()}")
 
     spark.stop()
 
