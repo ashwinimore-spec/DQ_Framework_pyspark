@@ -1,37 +1,59 @@
 import subprocess
 import sys
 
-def run_script(script):
-    print(f"\n▶ Running {script}")
-    result = subprocess.run(
-        ["python", f"scripts/{script}"],
-        capture_output=True,
-        text=True
-    )
-
-    print(result.stdout)
+def run_step(description, command):
+    print(f"\n--- {description} ---")
+    result = subprocess.run(command, shell=True)
 
     if result.returncode != 0:
-        print(result.stderr)
+        print(f"\n❌ Failed at step: {description}")
         sys.exit(1)
+
+    print(f"✅ Completed: {description}")
+
 
 def main():
     print("\n==============================")
     print(" STARTING DATA QUALITY PIPELINE ")
     print("==============================")
 
-    run_script("generate_raw_source_data.py")
-    run_script("clean_source_data.py")
-    run_script("generate_target_data.py")
-    run_script("validate_data_quality.py")
+    # 1. Generate raw source data
+    run_step(
+        "Generating raw source data",
+        "python scripts/generate_raw_source_data.py"
+    )
 
-    launch = input("\nLaunch dashboard? (y/n): ").lower()
-    if launch == "y":
-        run_script("dq_dashboard.py")
+    # 2. Clean source data
+    run_step(
+        "Cleaning source data",
+        "python scripts/clean_source_data.py"
+    )
+
+    # 3. Generate faulty target data
+    run_step(
+        "Generating target data with defects",
+        "python scripts/generate_target_data.py"
+    )
+
+    # 4. Run data quality validations
+    run_step(
+        "Running data quality validations",
+        "python scripts/validate_data_quality.py"
+    )
 
     print("\n==============================")
-    print(" PIPELINE COMPLETED SUCCESSFULLY ")
+    print(" PIPELINE EXECUTION COMPLETED ")
     print("==============================")
+
+    # Ask user if dashboard is needed
+    choice = input("\nDo you want to launch the dashboard? (y/n): ").strip().lower()
+
+    if choice == "y":
+        print("\nLaunching dashboard...")
+        subprocess.run("streamlit run scripts/dq_dashboard.py", shell=True)
+    else:
+        print("Dashboard skipped.")
+
 
 if __name__ == "__main__":
     main()
